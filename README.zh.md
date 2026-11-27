@@ -1,10 +1,8 @@
 # goInception
 
-[![travis-ci](https://img.shields.io/travis/hanchuanchuan/goInception.svg)](https://travis-ci.org/hanchuanchuan/goInception)
-[![CircleCI Status](https://circleci.com/gh/hanchuanchuan/goInception.svg?style=shield)](https://circleci.com/gh/hanchuanchuan/goInception)
 [![GitHub release](https://img.shields.io/github/release-pre/hanchuanchuan/goInception.svg?style=brightgreen)](https://github.com/hanchuanchuan/goInception/releases)
 [![codecov](https://codecov.io/gh/hanchuanchuan/goInception/branch/master/graph/badge.svg)](https://codecov.io/gh/hanchuanchuan/goInception)
-[![](https://img.shields.io/badge/go-1.12-brightgreen.svg)](https://golang.org/dl/)
+[![](https://img.shields.io/badge/go-1.22.12-brightgreen.svg)](https://golang.org/dl/)
 [![TiDB](https://img.shields.io/badge/TiDB-v2.1.1-brightgreen.svg)](https://github.com/pingcap/tidb)
 ![](https://img.shields.io/github/downloads/hanchuanchuan/goInception/total.svg)
 ![](https://img.shields.io/github/license/hanchuanchuan/goInception.svg)
@@ -43,7 +41,7 @@ docker pull hanchuanchuan/goinception
 
 #### 源码编译
 
-***go version 1.14 (go mod)***
+***go version 1.22.12 (go mod)***
 
 ```bash
 git clone https://github.com/hanchuanchuan/goInception.git

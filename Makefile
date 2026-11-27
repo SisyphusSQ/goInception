@@ -1,87 +1,78 @@
-PROJECT=goInception
+PROJECT := goInception
 GOPATH ?= $(shell go env GOPATH)
 
-# Ensure GOPATH is set before running build process.
-ifeq "$(GOPATH)" ""
-  $(error Please set the environment variable GOPATH before running `make`)
+ifneq "$(GOPATH)" ""
+path_to_add := $(addsuffix /bin,$(subst :,/bin:,$(GOPATH)))
+export PATH := $(path_to_add):$(PATH)
 endif
+
 FAIL_ON_STDOUT := awk '{ print } END { if (NR > 0) { exit 1 } }'
 
 CURDIR := $(shell pwd)
 UNAME_S := $(shell uname -s)
-path_to_add := $(addsuffix /bin,$(subst :,/bin:,$(GOPATH)))
-export PATH := $(path_to_add):$(PATH)
 
-GO        := GO111MODULE=on go
+GOTOOLCHAIN ?= go1.22.12
+GO        := GOTOOLCHAIN=$(GOTOOLCHAIN) GO111MODULE=on go
 GOBUILD   := CGO_ENABLED=0 $(GO) build $(BUILD_FLAG)
 
-VERSION := $(shell git describe --tags --dirty)
-
-VERSION_EASY := $(shell git describe --tags)
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+VERSION_EASY := $(shell git describe --tags --always 2>/dev/null || echo dev)
+GIT_HASH := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
+GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
+BUILD_TS := $(shell date '+%Y-%m-%d %H:%M:%S')
+GO_VERSION := $(shell $(GO) version)
 
 # 指定部分单元测试跳过
 ifeq ("$(SHORT)", "1")
-	GOTEST    := CGO_ENABLED=1 $(GO) test -p 3 -short
+	GOTEST := CGO_ENABLED=1 $(GO) test -p 3 -short
 else
-	GOTEST    := CGO_ENABLED=1 $(GO) test -p 3
+	GOTEST := CGO_ENABLED=1 $(GO) test -p 3
 endif
 
-ifeq "$(GOVERALLS_SERVICE)" ""
-	GOVERALLS_SERVICE    := "circle-ci"
-	GOVERALLS_PROJECT	 := "/home/circleci/go/src/github.com/hanchuanchuan/goInception"
-else
-	GOVERALLS_SERVICE    := "github"
-	GOVERALLS_PROJECT	 := "/home/runner/work/goInception/goInception"
-endif
-
-OVERALLS  := CGO_ENABLED=1 GO111MODULE=on overalls
-GOVERALLS := goveralls
-
-ARCH      := "`uname -s`"
-LINUX     := "Linux"
-MAC       := "Darwin"
-PACKAGE_LIST  := go list ./...| grep -vE "vendor"
-PACKAGES  := $$($(PACKAGE_LIST))
-PACKAGE_DIRECTORIES := $(PACKAGE_LIST) | sed 's|github.com/hanchuanchuan/$(PROJECT)/||'
-FILES     := $$(find $$($(PACKAGE_DIRECTORIES)) -name "*.go")
+PACKAGE_LIST := $(GO) list ./... | grep -vE "vendor"
+PACKAGES := $$($(PACKAGE_LIST))
+FILES := $$(find . -name "*.go" -not -path "./vendor/*" -not -path "./.git/*" -not -path "./tools/*")
 
 GOFAIL_ENABLE  := $$(find $$PWD/ -type d | grep -vE "(\.git|vendor)" | xargs gofail enable)
 GOFAIL_DISABLE := $$(find $$PWD/ -type d | grep -vE "(\.git|vendor)" | xargs gofail disable)
 
-LDFLAGS += -X "github.com/hanchuanchuan/goInception/mysql.TiDBReleaseVersion=$(shell git describe --tags --dirty)"
-LDFLAGS += -X "github.com/hanchuanchuan/goInception/util/printer.TiDBBuildTS=$(shell date '+%Y-%m-%d %H:%M:%S')"
-LDFLAGS += -X "github.com/hanchuanchuan/goInception/util/printer.TiDBGitHash=$(shell git rev-parse HEAD)"
-LDFLAGS += -X "github.com/hanchuanchuan/goInception/util/printer.TiDBGitBranch=$(shell git rev-parse --abbrev-ref HEAD)"
-LDFLAGS += -X "github.com/hanchuanchuan/goInception/util/printer.GoVersion=$(shell go version)"
+LDFLAGS += -X "github.com/hanchuanchuan/goInception/mysql.TiDBReleaseVersion=$(VERSION)"
+LDFLAGS += -X "github.com/hanchuanchuan/goInception/util/printer.TiDBBuildTS=$(BUILD_TS)"
+LDFLAGS += -X "github.com/hanchuanchuan/goInception/util/printer.TiDBGitHash=$(GIT_HASH)"
+LDFLAGS += -X "github.com/hanchuanchuan/goInception/util/printer.TiDBGitBranch=$(GIT_BRANCH)"
+LDFLAGS += -X "github.com/hanchuanchuan/goInception/util/printer.GoVersion=$(GO_VERSION)"
 
-TEST_LDFLAGS =  -X "github.com/hanchuanchuan/goInception/config.checkBeforeDropLDFlag=1"
+TEST_LDFLAGS := -X "github.com/hanchuanchuan/goInception/config.checkBeforeDropLDFlag=1"
+CHECK_LDFLAGS += $(LDFLAGS) $(TEST_LDFLAGS)
 
-CHECK_LDFLAGS += $(LDFLAGS) ${TEST_LDFLAGS}
+TARGET ?=
+IMAGE_NAME ?= hanchuanchuan/goinception
+IMAGE_TAG ?= $(VERSION_EASY)
 
-TARGET = ""
-
-.PHONY: all build update parser clean todo test gotest interpreter server dev benchkv benchraw check parserlib checklist testapi docs level
+.PHONY: default all build buildsucc server server-admin-check server_check \
+	goyacc parser parserlib fmt fmt-parser vet lint check \
+	clean todo test gotest explaintest testapi race leak tikv_integration_test \
+	benchkv benchraw benchdb importer checklist \
+	gofail-enable gofail-disable release release2 docker docker-push docs level
 
 default: server buildsucc
 
 server-admin-check: server_check buildsucc
 
 buildsucc:
-	@echo Build TiDB Server successfully!
+	@echo "Build goInception Server successfully!"
 
 all: dev server benchkv
 
-# dev: checklist parserlib test check
-dev: checklist parserlib test
+dev: checklist test
 
 build:
-	$(GOBUILD)
+	$(GOBUILD) ./...
 
-goyacc:
-	@$(GOBUILD) -o bin/goyacc parser/goyacc/main.go
+goyacc: bin/goyacc
 
 bin/goyacc: parser/goyacc/main.go parser/goyacc/format_yacc.go
-	$(GO) mod download
+	@mkdir -p bin
 	$(GO) build -o bin/goyacc parser/goyacc/main.go parser/goyacc/format_yacc.go
 
 parser: parser/parser.go parser/hintparser.go
@@ -91,12 +82,11 @@ parser/parser.go: parser/parser.y bin/goyacc
 	@bin/goyacc -o $@ -p yy -t Parser $< && echo 'SUCCESS!' || ( rm -f $@ && echo 'Please check y.output for more information' && exit 1 )
 	@rm -f y.output
 	# Clean invalid UTF-8 encoding at the end
-
-	echo "os: ${UNAME_S}"
+	@echo "os: $(UNAME_S)"
 ifeq ($(UNAME_S),Darwin)
-	sed -i '' '$$d' $@;
+	sed -i '' '$$d' $@
 else
-	sed -i '$$d' $@;
+	sed -i '$$d' $@
 endif
 	gofmt -s -w $@
 
@@ -105,108 +95,44 @@ parser/hintparser.go: parser/hintparser.y bin/goyacc
 	@bin/goyacc -o $@ -p yyhint -t hintParser $< && echo 'SUCCESS!' || ( rm -f $@ && echo 'Please check y.output for more information' && exit 1 )
 	@rm -f y.output
 	# Clean invalid UTF-8 encoding at the end
-
-	echo "os: ${UNAME_S}"
+	@echo "os: $(UNAME_S)"
 ifeq ($(UNAME_S),Darwin)
-	sed -i '' '$$d' $@;
+	sed -i '' '$$d' $@
 else
-	sed -i '$$d' $@;
+	sed -i '$$d' $@
 endif
 	gofmt -s -w $@
 
-# %arser.go: prefix = $(@:parser.go=)
-# %arser.go: %arser.y bin/goyacc
-# 	@echo "bin/goyacc -o $@ -p yy$(prefix) -t $(prefix)Parser $<"
-# 	@bin/goyacc -o $@ -p yy$(prefix) -t $(prefix)Parser $< && echo 'SUCCESS!' || ( rm -f $@ && echo 'Please check y.output for more information' && exit 1 )
-# 	@rm -f y.output
-
-%arser.go: prefix = $(@:parser.go=)
-%arser.go: %arser.y bin/goyacc
-	@echo "bin/goyacc -o $@ -p yy$(prefix) -t $(prefix)Parser $<"
-	@bin/goyacc -o $@ -p yy$(prefix) -t $(prefix)Parser $< && echo 'SUCCESS!' || ( rm -f $@ && echo 'Please check y.output for more information' && exit 1 )
-	@rm -f y.output
-
-
-%arser_golden.y: %arser.y
+%arser_golden.y: parser/%arser.y bin/goyacc
 	@bin/goyacc -fmt -fmtout $@ $<
 	@(git diff --no-index --exit-code $< $@ && rm $@) || (mv $@ $< && >&2 echo "formatted $<" && exit 1)
 
-
-# parser: goyacc
-# 	bin/goyacc -o /dev/null parser/parser.y
-# 	@bin/goyacc -o parser/parser.go parser/parser.y 2>&1 | egrep "(shift|reduce)/reduce" | awk '{print} END {if (NR > 0) {print "Find conflict in parser.y. Please check y.output for more information."; exit 1;} else {print "SUCCESS!"}}'
-# 	@rm -f y.output
-
-	# @if [ $(ARCH) = $(LINUX) ]; \
-	# then \
-	# 	sed -i -e 's|//line.*||' -e 's/yyEofCode/yyEOFCode/' parser/parser.go; \
-	# elif [ $(ARCH) = $(MAC) ]; \
-	# then \
-	# 	/usr/bin/sed -i "" 's|//line.*||' parser/parser.go; \
-	# 	/usr/bin/sed -i "" 's/yyEofCode/yyEOFCode/' parser/parser.go; \
-	# fi
-
-	# @awk 'BEGIN{print "// Code generated by goyacc"} {print $0}' parser/parser.go > tmp_parser.go && mv tmp_parser.go parser/parser.go;
-
 parserlib: parser/parser.go
 
-# parser/parser.go: parser/parser.y
-# 	make parser
-
-# Install the check tools.
-check-setup:tools/bin/revive tools/bin/goword tools/bin/gometalinter tools/bin/gosec
-# @which retool >/dev/null 2>&1 || go get github.com/twitchtv/retool
-# @retool sync
-
-check: check-setup fmt lint vet fmt-parser
-
-# These need to be fixed before they can be ran regularly
-check-fail: goword check-static check-slow
+check: fmt vet
 
 fmt:
 	@echo "gofmt (simplify)"
 	@gofmt -s -l -w $(FILES) 2>&1 | $(FAIL_ON_STDOUT)
 
-# hint_golden.y
 fmt-parser: bin/goyacc parser_golden.y
 	@echo "gofmt (simplify)"
-	@gofmt -s -l -w . 2>&1 | awk '{print} END{if(NR>0) {exit 1}}'
+	@gofmt -s -l -w . 2>&1 | $(FAIL_ON_STDOUT)
 
-%arser_golden.y: parser/%arser.y
-	@bin/goyacc -fmt -fmtout $@ $<
-	@(git diff --no-index --exit-code $< $@ && rm $@) || (mv $@ $< && >&2 echo "formatted $<" && exit 1)
-
-goword:tools/bin/goword
-	tools/bin/goword $(FILES) 2>&1 | $(FAIL_ON_STDOUT)
-
-check-static:
-	@ # vet and fmt have problems with vendor when ran through metalinter
-	CGO_ENABLED=0 retool do gometalinter.v2 --disable-all --deadline 120s \
-	  --enable misspell \
-	  --enable megacheck \
-	  --enable ineffassign \
-	  $$($(PACKAGE_DIRECTORIES))
-
-check-slow:
-	CGO_ENABLED=0 retool do gometalinter.v2 --disable-all \
-	  --enable errcheck \
-	  $$($(PACKAGE_DIRECTORIES))
-	CGO_ENABLED=0 retool do gosec $$($(PACKAGE_DIRECTORIES))
-
-lint:tools/bin/revive
+lint: tools/bin/revive
 	@echo "linting"
 	@tools/bin/revive -formatter friendly -config tools/check/revive.toml ./...
 
 vet:
 	@echo "vet"
-	$(GO) vet -all $(PACKAGES) 2>&1 | $(FAIL_ON_STDOUT)
+	$(GO) vet ./...
 
 clean:
 	$(GO) clean -i ./...
-	rm -rf *.out
+	rm -rf *.out bin/goInception bin/goyacc bin/benchkv bin/benchraw bin/benchdb bin/importer release
 
 todo:
-	@grep -n ^[[:space:]]*_[[:space:]]*=[[:space:]][[:alpha:]][[:alnum:]]* */*.go parser/parser.y || true
+	@grep -n '^[[:space:]]*_[[:space:]]*=[[:space:]][[:alpha:]][[:alnum:]]*' */*.go parser/parser.y || true
 	@grep -n TODO */*.go parser/parser.y || true
 	@grep -n BUG */*.go parser/parser.y || true
 	@grep -n println */*.go parser/parser.y || true
@@ -216,55 +142,40 @@ test: checklist gotest explaintest
 explaintest: server
 	@cd cmd/explaintest && ./run-tests.sh -s ../../bin/goInception
 
-gotest: parserlib
+gotest:
 	$(GO) install github.com/etcd-io/gofail@v0.0.0-20180808172546-51ce9a71510a
 	@$(GOFAIL_ENABLE)
-ifeq ("$(TRAVIS_COVERAGE)", "1")
-	@echo "Running in TRAVIS_COVERAGE mode."
-	@export log_level=error; \
-	go install github.com/go-playground/overalls@7df9f728c018
-	# go get github.com/mattn/goveralls
-	# $(OVERALLS) -project=github.com/hanchuanchuan/goInception -covermode=count -ignore='.git,vendor,cmd,docs,LICENSES' || { $(GOFAIL_DISABLE); exit 1; }
-	# $(GOVERALLS) -service=$(GOVERALLS_SERVICE) -coverprofile=overalls.coverprofile || { $(GOFAIL_DISABLE); exit 1; }
-
-	$(OVERALLS) -project=$(GOVERALLS_PROJECT) -covermode=count -ignore='.git,vendor,cmd,docs,LICENSES' -concurrency=1 -- -short || { $(GOFAIL_DISABLE); exit 1; }
-else
-
 ifeq ("$(API)", "1")
 	@echo "Running in native mode (API)."
-	@export log_level=error;
-	$(GOTEST) -timeout 30m -ldflags '$(TEST_LDFLAGS)' github.com/hanchuanchuan/goInception/session -api
+	@export log_level=error; \
+	$(GOTEST) -timeout 30m -ldflags '$(TEST_LDFLAGS)' github.com/hanchuanchuan/goInception/session -api || { $(GOFAIL_DISABLE); exit 1; }
 else
 	@echo "Running in native mode."
-	@export log_level=error;
-	$(GO) mod tidy;
+	@export log_level=error; \
 	$(GOTEST) -timeout 30m -ldflags '$(TEST_LDFLAGS)' -cover $(PACKAGES) || { $(GOFAIL_DISABLE); exit 1; }
-endif
-
 endif
 	@$(GOFAIL_DISABLE)
 
-testapi: parserlib
+testapi:
 	@echo "Running in native mode (API)."
-	@export log_level=error;
+	@export log_level=error; \
 	$(GOTEST) -timeout 30m -ldflags '$(TEST_LDFLAGS)' github.com/hanchuanchuan/goInception/session -api
 
-
-race: parserlib
+race:
 	$(GO) install github.com/etcd-io/gofail@v0.0.0-20180808172546-51ce9a71510a
 	@$(GOFAIL_ENABLE)
 	@export log_level=debug; \
 	$(GOTEST) -timeout 30m -race $(PACKAGES) || { $(GOFAIL_DISABLE); exit 1; }
 	@$(GOFAIL_DISABLE)
 
-leak: parserlib
+leak:
 	$(GO) install github.com/etcd-io/gofail@v0.0.0-20180808172546-51ce9a71510a
 	@$(GOFAIL_ENABLE)
 	@export log_level=debug; \
 	$(GOTEST) -tags leak $(PACKAGES) || { $(GOFAIL_DISABLE); exit 1; }
 	@$(GOFAIL_DISABLE)
 
-tikv_integration_test: parserlib
+tikv_integration_test:
 	$(GO) install github.com/etcd-io/gofail@v0.0.0-20180808172546-51ce9a71510a
 	@$(GOFAIL_ENABLE)
 	$(GOTEST) ./store/tikv/. -with-tikv=true || { $(GOFAIL_DISABLE); exit 1; }
@@ -273,7 +184,7 @@ tikv_integration_test: parserlib
 RACE_FLAG =
 ifeq ("$(WITH_RACE)", "1")
 	RACE_FLAG = -race
-	GOBUILD   = GOPATH=$(GOPATH) CGO_ENABLED=1 $(GO) build
+	GOBUILD   = CGO_ENABLED=1 $(GO) build $(BUILD_FLAG)
 endif
 
 CHECK_FLAG =
@@ -281,133 +192,105 @@ ifeq ("$(WITH_CHECK)", "1")
 	CHECK_FLAG = $(TEST_LDFLAGS)
 endif
 
-server: parserlib
-ifeq ($(TARGET), "")
+server:
+ifeq ($(strip $(TARGET)),)
+	@mkdir -p bin
 	$(GOBUILD) $(RACE_FLAG) -ldflags '$(LDFLAGS) $(CHECK_FLAG)' -o bin/goInception tidb-server/main.go
 else
+	@mkdir -p "$(dir $(TARGET))"
 	$(GOBUILD) $(RACE_FLAG) -ldflags '$(LDFLAGS) $(CHECK_FLAG)' -o '$(TARGET)' tidb-server/main.go
 endif
 
-server_check: parserlib
-ifeq ($(TARGET), "")
+server_check:
+ifeq ($(strip $(TARGET)),)
+	@mkdir -p bin
 	$(GOBUILD) $(RACE_FLAG) -ldflags '$(CHECK_LDFLAGS)' -o bin/goInception tidb-server/main.go
 else
+	@mkdir -p "$(dir $(TARGET))"
 	$(GOBUILD) $(RACE_FLAG) -ldflags '$(CHECK_LDFLAGS)' -o '$(TARGET)' tidb-server/main.go
 endif
 
 benchkv:
+	@mkdir -p bin
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/benchkv cmd/benchkv/main.go
 
 benchraw:
+	@mkdir -p bin
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/benchraw cmd/benchraw/main.go
 
 benchdb:
+	@mkdir -p bin
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/benchdb cmd/benchdb/main.go
 
 importer:
+	@mkdir -p bin
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/importer ./cmd/importer
-
-update:
-	which dep 2>/dev/null || go get -u github.com/golang/dep/cmd/dep
-ifdef PKG
-	dep ensure -add ${PKG}
-else
-	dep ensure -update
-endif
-	@echo "removing test files"
-	dep prune
-	bash ./hack/clean_vendor.sh
 
 checklist:
 	cat checklist.md
 
 gofail-enable:
-# Converting gofail failpoints...
 	@$(GOFAIL_ENABLE)
 
 gofail-disable:
-# Restoring gofail failpoints...
 	@$(GOFAIL_DISABLE)
 
-upload-coverage: SHELL:=/bin/bash
-upload-coverage:
-ifeq ("$(TRAVIS_COVERAGE)", "1")
-	mv overalls.coverprofile coverage.txt
-	bash <(curl -s https://codecov.io/bash)
-endif
-
 tools/bin/revive: tools/check/go.mod
-	cd tools/check; \
-	$(GO) build -o ../bin/revive github.com/mgechev/revive
+	cd tools/check && $(GO) build -o ../bin/revive github.com/mgechev/revive
 
-tools/bin/goword: tools/check/go.mod
-	cd tools/check; \
-	$(GO) build -o ../bin/goword github.com/chzchzchz/goword
-
-tools/bin/gometalinter: tools/check/go.mod
-	cd tools/check; \
-	$(GO) build -o ../bin/gometalinter gopkg.in/alecthomas/gometalinter.v3
-
-tools/bin/gosec: tools/check/go.mod
-	cd tools/check; \
-	$(GO) build -o ../bin/gosec github.com/securego/gosec/cmd/gosec
-
-# 	windows无法build,github.com/outbrain/golib有引用syslog.Writer,其在windows未实现.
-.PHONY: release
+# windows无法build,github.com/outbrain/golib有引用syslog.Writer,其在windows未实现.
 release:
-	@echo "$(CGREEN)Cross platform building for release ...$(CEND)"
+	@echo "Cross platform building for release ($(VERSION)) ..."
 	@mkdir -p release
-	@GOOS=darwin GOARCH=amd64 $(GOBUILD) -ldflags '-s -w $(LDFLAGS)'  -o goInception tidb-server/main.go
-	@tar -czf release/goInception-macOS-amd64-${VERSION}.tar.gz goInception config/config.toml.default
-	@rm -f goInception
+	@GOOS=darwin GOARCH=amd64 $(GOBUILD) -ldflags '-s -w $(LDFLAGS)' -o release/goInception tidb-server/main.go
+	@tar -czf release/goInception-macOS-amd64-$(VERSION).tar.gz -C release goInception -C .. config/config.toml.default
+	@rm -f release/goInception
 
-	@GOOS=linux GOARCH=amd64 $(GOBUILD) -ldflags '-s -w $(LDFLAGS)'  -o goInception tidb-server/main.go
-	@tar -czf release/goInception-linux-amd64-${VERSION}.tar.gz goInception config/config.toml.default
-	@rm -f goInception
+	@GOOS=linux GOARCH=amd64 $(GOBUILD) -ldflags '-s -w $(LDFLAGS)' -o release/goInception tidb-server/main.go
+	@tar -czf release/goInception-linux-amd64-$(VERSION).tar.gz -C release goInception -C .. config/config.toml.default
+	@rm -f release/goInception
 
-	@GOOS=darwin GOARCH=arm64 $(GOBUILD) -ldflags '-s -w $(LDFLAGS)'  -o goInception tidb-server/main.go
-	@tar -czf release/goInception-macOS-arm64-${VERSION}.tar.gz goInception config/config.toml.default
-	@rm -f goInception
+	@GOOS=darwin GOARCH=arm64 $(GOBUILD) -ldflags '-s -w $(LDFLAGS)' -o release/goInception tidb-server/main.go
+	@tar -czf release/goInception-macOS-arm64-$(VERSION).tar.gz -C release goInception -C .. config/config.toml.default
+	@rm -f release/goInception
 
-	@GOOS=linux GOARCH=arm64 $(GOBUILD) -ldflags '-s -w $(LDFLAGS)'  -o goInception tidb-server/main.go
-	@tar -czf release/goInception-linux-arm64-${VERSION}.tar.gz goInception config/config.toml.default
-	@rm -f goInception
+	@GOOS=linux GOARCH=arm64 $(GOBUILD) -ldflags '-s -w $(LDFLAGS)' -o release/goInception tidb-server/main.go
+	@tar -czf release/goInception-linux-arm64-$(VERSION).tar.gz -C release goInception -C .. config/config.toml.default
+	@rm -f release/goInception
 
-.PHONY: release
 release2:
-	@echo "$(CGREEN)Cross platform building for release ...$(CEND)"
+	@echo "Cross platform building for release ($(VERSION_EASY)) ..."
 	@mkdir -p release
+	@GOOS=darwin GOARCH=amd64 $(GOBUILD) -ldflags '-s -w $(LDFLAGS)' -o release/goInception tidb-server/main.go
+	@tar -czf release/goInception-macOS-amd64-$(VERSION_EASY).tar.gz -C release goInception -C .. config/config.toml.default
+	@rm -f release/goInception
 
-	@GOOS=darwin GOARCH=amd64 $(GOBUILD) -ldflags '-s -w $(LDFLAGS)'  -o goInception tidb-server/main.go
-	@tar -czf release/goInception-macOS-${VERSION_EASY}.tar.gz goInception config/config.toml.default
-	@rm -f goInception
+	@GOOS=linux GOARCH=amd64 $(GOBUILD) -ldflags '-s -w $(LDFLAGS)' -o release/goInception tidb-server/main.go
+	@tar -czf release/goInception-linux-amd64-$(VERSION_EASY).tar.gz -C release goInception -C .. config/config.toml.default
+	@rm -f release/goInception
 
-	@GOOS=linux GOARCH=amd64 $(GOBUILD) -ldflags '-s -w $(LDFLAGS)'  -o goInception tidb-server/main.go
-	@tar -czf release/goInception-linux-${VERSION_EASY}.tar.gz goInception config/config.toml.default
-	@rm -f goInception
+	@GOOS=darwin GOARCH=arm64 $(GOBUILD) -ldflags '-s -w $(LDFLAGS)' -o release/goInception tidb-server/main.go
+	@tar -czf release/goInception-macOS-arm64-$(VERSION_EASY).tar.gz -C release goInception -C .. config/config.toml.default
+	@rm -f release/goInception
 
+	@GOOS=linux GOARCH=arm64 $(GOBUILD) -ldflags '-s -w $(LDFLAGS)' -o release/goInception tidb-server/main.go
+	@tar -czf release/goInception-linux-arm64-$(VERSION_EASY).tar.gz -C release goInception -C .. config/config.toml.default
+	@rm -f release/goInception
 
 docker:
-	@if [ ! -f bin/percona-toolkit.tar.gz ];then \
-		wget -O bin/percona-toolkit.tar.gz https://www.percona.com/downloads/percona-toolkit/3.0.4/source/tarball/percona-toolkit-3.0.4.tar.gz; \
-	fi
-	@if [ ! -f bin/pt-online-schema-change ];then \
-		wget -O bin/pt-online-schema-change percona.com/get/pt-online-schema-change; \
-	fi
-	@if [ ! -f bin/gh-ost ];then \
-		wget -O bin/gh-ost.tar.gz https://github.com/github/gh-ost/releases/download/v1.1.0/gh-ost-binary-linux-20200828140552.tar.gz; \
-		tar -zxvf bin/gh-ost.tar.gz -C bin/; \
-	fi
-	GOOS=linux GOARCH=amd64 $(GOBUILD) -ldflags '-s -w $(LDFLAGS)' -o bin/goInception tidb-server/main.go
-	v1=$(shell git tag | awk -F'-' '{print $1}' |tail -1) && docker build -t hanchuanchuan/goinception:$${v1} . \
-	&& docker tag hanchuanchuan/goinception:$${v1} hanchuanchuan/goinception:latest
+	docker build \
+		--build-arg APP_VERSION="$(VERSION)" \
+		--build-arg GIT_HASH="$(GIT_HASH)" \
+		--build-arg GIT_BRANCH="$(GIT_BRANCH)" \
+		-t $(IMAGE_NAME):$(IMAGE_TAG) \
+		-t $(IMAGE_NAME):latest .
 
 docker-push:
-	v1=$(shell git tag|tail -1) && docker push hanchuanchuan/goinception:$${v1} \
-	&& docker push hanchuanchuan/goinception:latest
+	docker push $(IMAGE_NAME):$(IMAGE_TAG)
+	docker push $(IMAGE_NAME):latest
 
 docs:
-	$(shell bash docs/deploy.sh)
+	bash docs/deploy.sh
 
 level:
 	$(GO) run config/generate_levels/main.go

@@ -17,10 +17,12 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22.1'
+          go-version-file: go.mod
 
       - name: package
         run: make release

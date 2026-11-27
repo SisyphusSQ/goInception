@@ -1,68 +1,73 @@
-FROM golang:1.14-alpine as builder
-# MAINTAINER hanchuanchuan <chuanchuanhan@gmail.com>
+# syntax=docker/dockerfile:1
 
-ENV TZ=Asia/Shanghai
-ENV LANG="en_US.UTF-8"
+FROM --platform=$BUILDPLATFORM golang:1.22.12-alpine3.21 AS builder
+
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+ARG GHOST_VERSION=v1.1.11
+ARG PT_VERSION=3.7.2
+ARG APP_VERSION=unknown
+ARG GIT_HASH=unknown
+ARG GIT_BRANCH=unknown
+
+RUN apk add --no-cache ca-certificates curl tar
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN mkdir -p /out \
+  && BUILD_TS="$(date '+%Y-%m-%d %H:%M:%S')" \
+  && GO_VER="$(go version)" \
+  && CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
+    -ldflags "-s -w \
+      -X 'github.com/hanchuanchuan/goInception/mysql.TiDBReleaseVersion=${APP_VERSION}' \
+      -X 'github.com/hanchuanchuan/goInception/util/printer.TiDBBuildTS=${BUILD_TS}' \
+      -X 'github.com/hanchuanchuan/goInception/util/printer.TiDBGitHash=${GIT_HASH}' \
+      -X 'github.com/hanchuanchuan/goInception/util/printer.TiDBGitBranch=${GIT_BRANCH}' \
+      -X 'github.com/hanchuanchuan/goInception/util/printer.GoVersion=${GO_VER}'" \
+    -o /out/goInception tidb-server/main.go
+
+RUN set -eux; \
+  GHOST_ARCHIVE="gh-ost-linux-${TARGETARCH}.tar.gz"; \
+  curl -fsSL -o "/tmp/${GHOST_ARCHIVE}" "https://github.com/github/gh-ost/releases/download/${GHOST_VERSION}/${GHOST_ARCHIVE}"; \
+  curl -fsSL -o /tmp/SHA256SUMS "https://github.com/github/gh-ost/releases/download/${GHOST_VERSION}/SHA256SUMS"; \
+  (cd /tmp && grep "  ${GHOST_ARCHIVE}\$" SHA256SUMS | sha256sum -c -); \
+  tar -xzf "/tmp/${GHOST_ARCHIVE}" -C /out gh-ost; \
+  chmod +x /out/gh-ost; \
+  rm -f "/tmp/${GHOST_ARCHIVE}" /tmp/SHA256SUMS
+
+RUN set -eux; \
+  curl -fsSL -o /out/pt-online-schema-change "https://raw.githubusercontent.com/percona/percona-toolkit/v${PT_VERSION}/bin/pt-online-schema-change"; \
+  chmod +x /out/pt-online-schema-change
+
+FROM alpine:3.24
+
+ENV LANG="en_US.UTF-8" \
+    TZ="Asia/Shanghai"
 
 RUN apk add --no-cache \
-    ca-certificates wget \
-    make \
-    git \
-    gcc \
-    musl-dev
+    ca-certificates \
+    dumb-init \
+    perl \
+    perl-dbi \
+    perl-dbd-mysql \
+    perl-io-socket-ssl \
+    perl-term-readkey \
+    tzdata \
+  && ln -snf "/usr/share/zoneinfo/${TZ}" /etc/localtime \
+  && echo "${TZ}" > /etc/timezone
 
-RUN wget -q -O /usr/local/bin/dumb-init https://github.com/Yelp/dumb-init/releases/download/v1.2.2/dumb-init_1.2.2_amd64 \
-&& wget -q -O /etc/apk/keys/sgerrand.rsa.pub https://alpine-pkgs.sgerrand.com/sgerrand.rsa.pub \
-&& wget -q -O /glibc.apk https://github.com/sgerrand/alpine-pkg-glibc/releases/download/2.28-r0/glibc-2.28-r0.apk \
- && chmod +x /usr/local/bin/dumb-init
-
-COPY bin/goInception /goInception
-# COPY bin/percona-toolkit.tar.gz /tmp/percona-toolkit.tar.gz
-COPY bin/pt-online-schema-change /tmp/pt-online-schema-change
-COPY bin/gh-ost /tmp/gh-ost
+COPY --from=builder /out/goInception /goInception
+COPY --from=builder /out/gh-ost /usr/local/bin/gh-ost
+COPY --from=builder /out/pt-online-schema-change /usr/local/bin/pt-online-schema-change
 COPY config/config.toml.default /etc/config.toml
-
-# Executable image
-FROM alpine
-
-COPY --from=builder /glibc.apk /glibc.apk
-COPY --from=builder /etc/apk/keys/sgerrand.rsa.pub /etc/apk/keys/sgerrand.rsa.pub
-COPY --from=builder /goInception /goInception
-COPY --from=builder /etc/config.toml /etc/config.toml
-COPY --from=builder /usr/local/bin/dumb-init /usr/local/bin/dumb-init
-
-# COPY --from=builder /tmp/percona-toolkit.tar.gz /tmp/percona-toolkit.tar.gz
-COPY --from=builder /tmp/pt-online-schema-change /usr/local/bin/pt-online-schema-change
-COPY --from=builder /tmp/gh-ost /usr/local/bin/gh-ost
 
 WORKDIR /
 
 EXPOSE 4000
 
-ENV LANG="en_US.UTF-8"
-ENV TZ=Asia/Shanghai
-
-# ENV PERCONA_TOOLKIT_VERSION 3.0.4
-
-# && wget -O /tmp/percona-toolkit.tar.gz https://www.percona.com/downloads/percona-toolkit/${PERCONA_TOOLKIT_VERSION}/source/tarball/percona-toolkit-${PERCONA_TOOLKIT_VERSION}.tar.gz \
-
-#RUN set -x \
-#  && apk add --no-cache perl perl-dbi perl-dbd-mysql perl-io-socket-ssl perl-term-readkey make tzdata \
-#  && tar -xzvf /tmp/percona-toolkit.tar.gz -C /tmp \
-#  && cd /tmp/percona-toolkit-${PERCONA_TOOLKIT_VERSION} \
-#  && perl Makefile.PL \
-#  && make \
-#  && make test \
-#  && make install \
-#  && apk del make \
-#  && rm -rf /var/cache/apk/* /tmp/percona-toolkit*
-
-
-RUN set -x \
-  && apk add --no-cache --force-overwrite perl perl-dbi perl-dbd-mysql perl-io-socket-ssl perl-term-readkey tzdata /glibc.apk \
-  && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
-  && chmod +x /usr/local/bin/pt-online-schema-change \
-  && chmod +x /usr/local/bin/gh-ost \
-  && apk fix --force-overwrite alpine-baselayout-data
-
-ENTRYPOINT ["/usr/local/bin/dumb-init", "/goInception","--config=/etc/config.toml"]
+ENTRYPOINT ["/usr/bin/dumb-init", "--", "/goInception", "--config=/etc/config.toml"]
