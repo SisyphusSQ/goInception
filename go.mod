@@ -1,30 +1,20 @@
 module github.com/hanchuanchuan/goInception
 
-go 1.22.1
+go 1.22.12
 
+// 以下 replace 为兼容 TiDB v2.1 底座与 Go 1.22.x 刻意锁定，升级前需完整回归验证。
 replace gopkg.in/gcfg.v1 => github.com/hanchuanchuan/gcfg.v1 v0.0.0-20190302111942-77c0f3dcc0b3
 
-// replace go.etcd.io/gofail => github.com/etcd-io/gofail v0.0.0-20180808172546-51ce9a71510a
 replace github.com/etcd-io/gofail => go.etcd.io/gofail v0.0.0-20180808172546-51ce9a71510a
 
-// replace vitess.io/vitess => github.com/vitessio/vitess v3.0.0-rc.3+incompatible
 replace vitess.io/vitess => github.com/vitessio/vitess v0.19.1
 
 replace google.golang.org/grpc => google.golang.org/grpc v1.29.1
 
 replace github.com/codahale/hdrhistogram => github.com/HdrHistogram/hdrhistogram-go v1.1.2
 
-// replace github.com/coreos/bbolt => go.etcd.io/bbolt v1.3.9
-
 replace github.com/go-sql-driver/mysql => github.com/go-sql-driver/mysql v1.4.1-0.20191022112324-6ea7374bc1b0
 
-// replace  go.etcd.io/etcd => github.com/etcd-io/etcd a4f7c65
-// replace  github.com/coreos/etcd => github.com/etcd-io/etcd a4f7c65
-// replace go.etcd.io/etcd => github.com/etcd-io/etcd v0.5.0-alpha.5.0.20231122225832-2c8e2e933f77
-
-// replace github.com/coreos/etcd => go.etcd.io/etcd v0.5.0-alpha.5.0.20231122225832-2c8e2e933f77
-// replace inet.af/netaddr => github.com/inetaf/netaddr
-// replace gopkg.in/DataDog/dd-trace-go.v1 => github.com/DataDog/datadog-go v0.0.0-2d091ec
 replace gopkg.in/DataDog/dd-trace-go.v1 => gopkg.in/DataDog/dd-trace-go.v1 v1.29.0-alpha.1.0.20210216140755-2d091eca40bb
 
 require (
