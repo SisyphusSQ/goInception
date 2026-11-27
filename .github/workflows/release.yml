@@ -25,9 +25,15 @@ jobs:
           go-version-file: go.mod
 
       - name: package
-        run: make release
+        run: |
+          make release
+          (cd release && sha256sum *.tar.gz > SHA256SUMS)
 
       - name: release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create ${{ github.ref_name }} ./release/*.tar.gz
+        run: |
+          gh release create "${{ github.ref_name }}" ./release/*.tar.gz ./release/SHA256SUMS \
+            --title "${{ github.ref_name }}" \
+            --notes-from-tag \
+            --verify-tag
